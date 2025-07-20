@@ -1,8 +1,8 @@
-# HEYI: AI-Powered Interview Assistant
+# AI-Powered Interview Assistant
 
 ## Overview
 
-**HEYI** is a production-ready AI Interview Assistant designed for technical hiring. It leverages modern NLP, LLMs, and speech-to-text technologies to automate candidate screening, skill detection, and personalized interview question generation.
+This is a production-ready AI Interview Assistant designed for technical hiring. It leverages modern NLP, LLMs, and speech-to-text technologies to automate candidate screening, skill detection, and personalized interview question generation.
 
 ---
 
