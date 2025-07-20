@@ -1,0 +1,272 @@
+import requests
+from typing import Dict
+from datetime import datetime
+import os
+from pymongo import MongoClie        # Use Ollama for evaluation
+        ollama_url = "http://localhost:11434/api/generate"
+        
+        try:
+            # Make API call to Ollama
+            response = requests.post(ollama_url, 
+                json={
+                    "model": "llama3.2:3b",  # Better model for evaluation
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.3,  # Lower temperature for more consistent evaluation
+                        "top_p": 0.9
+                    }
+                }) import MONGODB_URI, DATABASE_NAME, HUGGINGFACE_API_KEY
+
+class InterviewService:
+    def __init__(self):
+        # Connect to MongoDB
+        self.client = MongoClient(MONGODB_URI)
+        self.db = self.client[DATABASE_NAME]
+        self.responses_collection = self.db["interview_responses"]
+        self.questions_collection = self.db["interview_questions"]
+        self.ollama_url = "http://localhost:11434/api/generate"
+        
+    def generate_questions(self, topic: str) -> list:
+        """
+        Generate technical interview questions using Ollama (v0.9.6)
+        
+        Args:
+            topic: The technical topic to generate questions about
+            
+        Returns:
+            List of exactly 3 interview questions
+        """
+        
+        prompt = f"""You are a technical interviewer specialized in {topic}. Generate exactly 3 unique and challenging technical interview questions.
+
+        Requirements:
+        1. Each question must be highly specific to {topic}
+        2. Include one intermediate, one advanced, and one expert-level question
+        3. Questions should test both theoretical knowledge and practical skills
+        4. Focus on real-world scenarios and problem-solving
+        5. Questions should require detailed technical explanations
+        
+        Format: Number each question from 1-3, one per line."""
+        
+        try:
+            response = requests.post(
+                self.ollama_url,
+                json={
+                    "model": "mistral",  # You can change this to any model you have in Ollama
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.7,
+                        "top_p": 0.9
+                    }
+                })
+            response.raise_for_status()
+            
+            # Parse the response
+            generated_text = response.json()["response"]
+            questions = [q.strip() for q in generated_text.split("\n") if q.strip() and any(c.isdigit() for c in q[:2])]
+            
+            # Store questions in MongoDB
+            self.questions_collection.insert_one({
+                "topic": topic,
+                "questions": questions,
+                "timestamp": datetime.utcnow()
+            })
+            
+            return questions
+            
+        except Exception as e:
+            print(f"Error generating questions: {str(e)}")
+            return []
+        
+    def evaluate_response(self, response_text: str, question: str = "") -> Dict:
+        """
+        Evaluate the candidate's response using the Hugging Face API
+        """
+        # Prepare a more detailed prompt for better evaluation
+        prompt = f"""As an expert technical interviewer, evaluate this interview response:
+
+Question: "{question}"
+
+Candidate's Response: "{response_text}"
+
+Provide a detailed evaluation in this exact JSON format:
+{{
+    "scores": {{
+        "relevance": (1-10 score based on how well the answer addresses the question),
+        "clarity": (1-10 score based on communication effectiveness),
+        "technical": (1-10 score based on technical accuracy and depth),
+        "problem_solving": (1-10 score based on analytical and solution approach)
+    }},
+    "feedback": {{
+        "relevance": "specific feedback about answer relevance",
+        "clarity": "feedback about communication clarity",
+        "technical": "feedback about technical accuracy",
+        "problem_solving": "feedback about problem-solving approach"
+    }},
+    "overall_feedback": "comprehensive evaluation and improvement suggestions",
+    "overall_score": (average of all scores)
+}}
+
+Scoring Guidelines:
+1-3: Poor/Incomplete
+4-5: Below Average
+6-7: Average
+8-9: Above Average
+10: Exceptional
+
+Base the evaluation on:
+1. Relevance: How directly the answer addresses the question
+2. Clarity: Communication structure and effectiveness
+3. Technical: Accuracy and depth of technical knowledge
+4. Problem-solving: Analytical thinking and solution approach
+
+Ensure scores reflect answer quality and provide specific, actionable feedback."""
+        
+        # Use Hugging Face API for evaluation
+        api_url = "https://api-inference.huggingface.co/models/bigscience/bloom"
+        headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
+        
+        try:
+            # Make API call with specific parameters for better control
+            response = requests.post(api_url, 
+                headers=headers,
+                json={
+                    "inputs": prompt,
+                    "parameters": {
+                        "max_length": 1000,
+                        "temperature": 0.7,
+                        "top_p": 0.9,
+                        "num_return_sequences": 1
+                    }
+                })
+            response.raise_for_status()
+            
+            # Parse the response
+            try:
+                eval_text = response.json()[0]["generated_text"]
+                # Find the JSON part of the response
+                import json
+                import re
+                
+                # Try to extract JSON object from the text
+                json_match = re.search(r'\{[\s\S]*\}', eval_text)
+                if json_match:
+                    evaluation = json.loads(json_match.group())
+                else:
+                    raise ValueError("No valid JSON found in response")
+                
+            except (json.JSONDecodeError, KeyError, IndexError) as e:
+                # Fallback scoring based on text analysis
+                evaluation = self._generate_fallback_evaluation(response_text)
+            
+            # Store the evaluation in MongoDB
+            self.responses_collection.insert_one({
+                "question": question,
+                "response": response_text,
+                "evaluation": evaluation,
+                "timestamp": datetime.utcnow()
+            })
+            
+            return evaluation
+            
+        except Exception as e:
+            print(f"Error in evaluation: {str(e)}")
+            return self._generate_fallback_evaluation(response_text)
+    
+    def _generate_fallback_evaluation(self, response_text: str) -> Dict:
+        """Generate a basic evaluation when API fails"""
+        # Content analysis
+        words = response_text.split()
+        word_count = len(words)
+        
+        # Relevance score based on response length and completeness
+        relevance = min(max(word_count // 20, 1), 10)  # Expecting 100-200 words for full score
+        
+        # Clarity score based on sentence structure
+        sentences = response_text.split('.')
+        avg_words_per_sentence = word_count / max(len(sentences), 1)
+        clarity = min(max(10 - abs(15 - avg_words_per_sentence), 1), 10)  # Optimal ~15 words per sentence
+        
+        # Technical score based on domain-specific terminology
+        technical = self._analyze_technical_content(response_text)
+        
+        # Problem solving based on analytical indicators
+        problem_indicators = [
+            "first", "second", "finally", "because", "therefore",
+            "however", "alternatively", "solution", "approach",
+            "advantage", "disadvantage", "trade-off", "consider",
+            "analyze", "evaluate"
+        ]
+        analytical_score = sum(1 for word in words if word.lower() in problem_indicators)
+        problem_solving = min(max(analytical_score * 2, 1), 10)
+        
+        # Apply weights to each score component
+        weights = {
+            'relevance': 0.25,
+            'clarity': 0.25,
+            'technical': 0.3,
+            'problem_solving': 0.2
+        }
+        
+        # Round individual scores
+        scores = {
+            "relevance": round(relevance, 1),
+            "clarity": round(clarity, 1),
+            "technical": round(technical, 1),
+            "problem_solving": round(problem_solving, 1)
+        }
+        
+        # Calculate weighted overall score
+        overall_score = sum(
+            scores[metric] * weights[metric]
+            for metric in weights.keys()
+        )
+        
+        return {
+            "scores": scores,
+            "feedback": {
+                "relevance": "Response length and content analysis used for scoring.",
+                "clarity": "Basic analysis of response structure.",
+                "technical": "Evaluation based on technical term usage.",
+                "problem_solving": "Score based on analytical phrase detection."
+            },
+            "overall_feedback": "Automated fallback evaluation performed. Manual review recommended.",
+            "overall_score": round(overall_score, 1)
+        }
+    
+    def _analyze_technical_content(self, response_text: str) -> float:
+        """Analyze technical content and complexity of the response"""
+        words = response_text.lower().split()
+        
+        # Technical terminology scoring
+        technical_terms = {
+            "high": ["algorithm", "complexity", "architecture", "optimization", "scalability", 
+                    "distributed", "concurrent", "asynchronous", "infrastructure"],
+            "medium": ["database", "api", "framework", "library", "performance", "memory", 
+                      "testing", "deployment", "security"],
+            "basic": ["code", "program", "function", "data", "test", "debug", "variable", 
+                     "loop", "condition"]
+        }
+        
+        score = 0
+        term_count = 0
+        for word in words:
+            if word in technical_terms["high"]:
+                score += 3
+                term_count += 1
+            elif word in technical_terms["medium"]:
+                score += 2
+                term_count += 1
+            elif word in technical_terms["basic"]:
+                score += 1
+                term_count += 1
+        
+        # Normalize score to 1-10 range
+        if term_count > 0:
+            normalized_score = min(max((score / term_count) * 3, 1), 10)
+        else:
+            normalized_score = 1
+        
+        return normalized_score
