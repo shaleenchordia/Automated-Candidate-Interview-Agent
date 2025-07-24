@@ -1,15 +1,26 @@
+# Core backend
 fastapi==0.104.1
 uvicorn==0.24.0
 python-multipart==0.0.6
 pydantic==2.4.2
+
+# NLP & AI
 spacy==3.7.2
 nltk==3.8.1
-pymongo==4.5.0
-requests==2.31.0
-python-dotenv==1.0.0
-streamlit==1.25.0
-python-docx==0.8.11
+openai-whisper==20231117  # Latest stable Whisper version
+openai==1.3.0
+
+# PDF and Resume Parsing
 PyPDF2==3.0.1
 pdfplumber==0.10.2
-openai==1.3.0
-whisper
+python-docx==0.8.11
+
+# Frontend
+streamlit==1.25.0
+
+# Database
+pymongo==4.5.0
+
+# Utility
+requests==2.31.0
+python-dotenv==1.0.0
